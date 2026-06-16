@@ -1,0 +1,326 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Architectures DECEPTR v1 MVP</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    @page { size: A4; margin: 14mm; }
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: #102033;
+      line-height: 1.42;
+      font-size: 11px;
+    }
+    h1 {
+      color: #082653;
+      font-size: 24px;
+      border-bottom: 3px solid #0a58ca;
+      padding-bottom: 8px;
+      margin: 0 0 18px;
+    }
+    h2 {
+      color: #0a3f86;
+      font-size: 16px;
+      margin: 22px 0 9px;
+      break-after: avoid;
+    }
+    h3, h4 {
+      color: #0a3f86;
+      font-size: 13px;
+      margin: 16px 0 7px;
+      break-after: avoid;
+    }
+    p { margin: 6px 0 10px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 8px 0 16px;
+      page-break-inside: avoid;
+    }
+    th {
+      background: #eaf2ff;
+      color: #082653;
+      font-weight: 700;
+    }
+    th, td {
+      border: 1px solid #b7c8de;
+      padding: 6px 7px;
+      vertical-align: top;
+    }
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      background: #f1f5f9;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+    pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 10px;
+      border-radius: 6px;
+      overflow: hidden;
+      page-break-inside: avoid;
+      white-space: pre-wrap;
+    }
+    .mermaid {
+      display: block;
+      margin: 10px auto 18px;
+      text-align: center;
+      page-break-inside: avoid;
+      transform-origin: top center;
+    }
+    .page-break { page-break-before: always; }
+  </style>
+</head>
+<body>
+<h1>Architecture Fonctionnelle - DECEPTR v1 MVP</h1>
+<p>Version mise a jour: 2026-06-15. Cette architecture correspond au projet final valide dans <code>D:\assir\Ismagi\PFA\DECEPTR-FINAL</code>.</p>
+<h2>Objectif</h2>
+<p>DECEPTR est une plateforme de cyberdeception qui attire les attaquants vers des services leurres, collecte leurs actions, enrichit les evenements avec du renseignement, detecte les comportements suspects, puis expose les resultats au SOC via dashboard, API, Kibana et rapports.</p>
+<h2>Schema fonctionnel</h2>
+<div class="mermaid">flowchart TB
+  A["Attaquants externes / internes&lt;br/&gt;bots, scanners, utilisateurs malveillants"] --&gt; B["Detection deception&lt;br/&gt;T-Pot Cowrie SSH/Telnet&lt;br/&gt;Web honeypot intranet&lt;br/&gt;Dionaea services decoy"]
+
+  B --&gt; C["Collecte securisee&lt;br/&gt;Filebeat T-Pot + logs honeypots"]
+  C --&gt; D["Ingestion&lt;br/&gt;Logstash TLS 1.3 TCP/5044"]
+  D --&gt; E["File d'attente&lt;br/&gt;Redis Queue deceptr:events"]
+
+  E --&gt; F["Collector Python"]
+  F --&gt; G["Normalizer Python&lt;br/&gt;schema evenement unifie"]
+  G --&gt; H["Enricher Python&lt;br/&gt;GeoLite2 / VirusTotal / AbuseIPDB / Feodo"]
+  H --&gt; I["Correlator Python&lt;br/&gt;campagnes, IoC, contexte"]
+  I --&gt; J["MITRE Mapper&lt;br/&gt;ATT&amp;CK tactics/techniques"]
+  J --&gt; K["Risk Scoring&lt;br/&gt;score 0-100 + severite"]
+  K --&gt; L["Detector / Alert Generator&lt;br/&gt;regles deception et honeytokens"]
+
+  L --&gt; M["Elasticsearch&lt;br/&gt;cowrie-* / deceptr-events-* / deceptr-web-honeypot"]
+  L --&gt; N["MySQL&lt;br/&gt;alerts / iocs / attackers / campaigns / honeytokens / users"]
+  L --&gt; O["MinIO&lt;br/&gt;reports / backups / malware-samples / attachments"]
+
+  M --&gt; P["Kibana&lt;br/&gt;analyse ELK"]
+  N --&gt; Q["FastAPI Backend&lt;br/&gt;JWT + API REST"]
+  Q --&gt; R["Dashboard DECEPTR&lt;br/&gt;SOC / Admin / Auditeur / Management"]
+  M --&gt; S["ElastAlert 2&lt;br/&gt;regles et notifications"]
+  S --&gt; T["Email / Webhook / Syslog"]</div>
+<h2>Couches fonctionnelles</h2>
+<table><thead><tr><th>Couche</th><th>Role</th><th>Services du projet</th></tr></thead><tbody><tr><td>1. Detection</td><td>Capturer connexions, commandes, identifiants, acces documents et probes</td><td>Cowrie, web honeypot, Dionaea, canary tokens</td></tr>
+<tr><td>2. Collecte</td><td>Lire les logs Cowrie et acheminer les evenements</td><td><code>deceptr-tpot-forwarder</code>, Filebeat</td></tr>
+<tr><td>3. Traitement initial</td><td>Parser et securiser l'entree vers le pipeline</td><td><code>deceptr-logstash</code>, TLS 1.3</td></tr>
+<tr><td>4. File d'attente</td><td>Eviter la perte d'evenements et decoupler ingestion/analyse</td><td><code>deceptr-redis</code></td></tr>
+<tr><td>5. Normalisation</td><td>Transformer chaque source en schema DECEPTR commun</td><td><code>normalizer.py</code></td></tr>
+<tr><td>6. Renseignement</td><td>Ajouter geo, reputation, C2, MITRE et contexte</td><td><code>enricher.py</code>, <code>correlator.py</code></td></tr>
+<tr><td>7. Detection</td><td>Declencher alertes, scoring, honeytokens, campagnes</td><td><code>detector.py</code>, <code>risk_scorer.py</code></td></tr>
+<tr><td>8. Stockage</td><td>Conserver preuves, alertes, IoC et rapports</td><td>Elasticsearch, MySQL, MinIO</td></tr>
+<tr><td>9. Visualisation</td><td>Exploiter les donnees operationnelles</td><td>Dashboard, Kibana, API Docs</td></tr>
+<tr><td>10. Alerting</td><td>Notifier incidents critiques et hauts risques</td><td>ElastAlert 2, alerter pipeline</td></tr></tbody></table>
+<h2>Flux de donnees valides</h2>
+<table><thead><tr><th>ID</th><th>Flux</th><th>Etat valide</th></tr></thead><tbody><tr><td>F1</td><td>Cowrie SSH/Telnet -&gt; cowrie.json</td><td>OK, T-Pot runtime actif</td></tr>
+<tr><td>F2</td><td>Filebeat -&gt; Logstash <code>5044</code></td><td>OK, TLS 1.3 teste</td></tr>
+<tr><td>F3</td><td>Logstash -&gt; Redis</td><td>OK, queue <code>deceptr:events</code></td></tr>
+<tr><td>F4</td><td>Redis -&gt; Pipeline</td><td>OK, collector consomme les evenements</td></tr>
+<tr><td>F5</td><td>Pipeline -&gt; Elasticsearch</td><td>OK, index <code>deceptr-events-2026.06</code></td></tr>
+<tr><td>F6</td><td>Pipeline -&gt; MySQL</td><td>OK, alertes, IoC, campagnes, honeytokens</td></tr>
+<tr><td>F7</td><td>Web honeypot -&gt; Elasticsearch</td><td>OK, index <code>deceptr-web-honeypot</code></td></tr>
+<tr><td>F8</td><td>Canary API -&gt; Redis -&gt; Pipeline</td><td>OK, alerte CRITICAL MITRE <code>T1039</code></td></tr>
+<tr><td>F9</td><td>API -&gt; Dashboard</td><td>OK, login JWT et stats dashboard</td></tr>
+<tr><td>F10</td><td>Elasticsearch -&gt; Kibana</td><td>OK, Kibana accessible</td></tr></tbody></table>
+<h2>Acteurs</h2>
+<table><thead><tr><th>Acteur</th><th>Utilisation</th></tr></thead><tbody><tr><td>SOC Analyst</td><td>Surveiller alertes, IoC, campagnes et sessions honeypot</td></tr>
+<tr><td>Administrateur</td><td>Lancer, arreter, configurer les services et secrets</td></tr>
+<tr><td>Auditeur</td><td>Consulter preuves, rapports DGSSI et historique</td></tr>
+<tr><td>Management</td><td>Lire indicateurs, tendance, risque et synthese</td></tr></tbody></table>
+<h2>Couverture validee</h2>
+<p>Le test E2E du 2026-06-15 a confirme: Cowrie actif, TLS 1.3, index brut <code>cowrie-2026.06</code>, index enrichi <code>deceptr-events-2026.06</code>, mapping MITRE <code>T1110</code>, API alertes fonctionnelle, et honeytoken critique <code>T1039</code>.</p>
+<div class="page-break"></div><h1>Architecture Reseau - DECEPTR v1 MVP</h1>
+<p>Version mise a jour: 2026-06-15. Cette vue decrit les zones, flux autorises et ports reels du projet final.</p>
+<h2>Schema reseau logique</h2>
+<div class="mermaid">flowchart TB
+  EXT["Zone externe&lt;br/&gt;Internet / Attaquants / Bots / Scanners"] --&gt; FW["Perimetre de securite&lt;br/&gt;pfSense / FortiGate&lt;br/&gt;NAT, filtrage, IDS/IPS, VPN"]
+
+  FW --&gt; DMZ["DMZ publique&lt;br/&gt;10.10.10.0/24"]
+
+  subgraph DMZ["DMZ publique / honeypots"]
+    TPOT["T-Pot Runtime&lt;br/&gt;IP cible: 10.10.10.10&lt;br/&gt;Cowrie SSH 22 / Telnet 23"]
+    WEBHP["Web honeypot intranet&lt;br/&gt;Port lab: 8082"]
+    DIONAEA["Dionaea decoys&lt;br/&gt;FTP 2121 / HTTP 8081 / SMB 1445 / MySQL 13306"]
+    FWD["Filebeat forwarder&lt;br/&gt;TLS vers Logstash 5044"]
+    TPOT --&gt; FWD
+  end
+
+  FWD --&gt;|"TLS 1.3 TCP/5044"| LAN["LAN analyse&lt;br/&gt;10.10.20.0/24"]
+
+  subgraph LAN["LAN analyse / services DECEPTR"]
+    LS["Logstash&lt;br/&gt;5044"]
+    REDIS["Redis Queue&lt;br/&gt;6379 interne"]
+    PIPE["Python Pipeline"]
+    ES["Elasticsearch&lt;br/&gt;9200"]
+    MYSQL["MySQL&lt;br/&gt;3306 interne"]
+    MINIO["MinIO&lt;br/&gt;9000/9001"]
+    API["FastAPI&lt;br/&gt;8000"]
+    KIB["Kibana&lt;br/&gt;5601"]
+    DASH["Dashboard&lt;br/&gt;8088"]
+    EA["ElastAlert 2"]
+    LS --&gt; REDIS --&gt; PIPE
+    PIPE --&gt; ES
+    PIPE --&gt; MYSQL
+    PIPE --&gt; MINIO
+    ES --&gt; KIB
+    MYSQL --&gt; API --&gt; DASH
+    ES --&gt; EA
+  end
+
+  SOC["Reseau Admin / SOC&lt;br/&gt;10.10.30.0/24&lt;br/&gt;VPN + MFA"] --&gt; DASH
+  SOC --&gt; KIB
+  SOC --&gt; API
+  SOC --&gt; MINIO</div>
+<h2>Zones reseau</h2>
+<table><thead><tr><th>Zone</th><th>Role</th><th>Exemple theorique</th></tr></thead><tbody><tr><td>Zone externe</td><td>Source des attaques et scans</td><td>Internet</td></tr>
+<tr><td>Perimetre</td><td>NAT, filtrage, IDS/IPS, VPN</td><td>pfSense / FortiGate</td></tr>
+<tr><td>DMZ</td><td>Honeypots exposes et leurres</td><td><code>10.10.10.0/24</code></td></tr>
+<tr><td>LAN analyse</td><td>Traitement, stockage, alerting</td><td><code>10.10.20.0/24</code></td></tr>
+<tr><td>Admin / SOC</td><td>Acces securise aux dashboards</td><td><code>10.10.30.0/24</code></td></tr></tbody></table>
+<h2>Ports exposes en environnement actuel</h2>
+<table><thead><tr><th>Service</th><th>Port hote</th><th>Port conteneur</th><th>Role</th></tr></thead><tbody><tr><td>Cowrie SSH</td><td>22</td><td>2222/22 selon runtime</td><td>Honeypot SSH</td></tr>
+<tr><td>Cowrie Telnet</td><td>23</td><td>2223/23 selon runtime</td><td>Honeypot Telnet</td></tr>
+<tr><td>Logstash Beats</td><td>5044</td><td>5044</td><td>Ingestion TLS 1.3</td></tr>
+<tr><td>Dashboard DECEPTR</td><td>8088</td><td>80</td><td>Interface SOC</td></tr>
+<tr><td>API FastAPI</td><td>8000</td><td>8000</td><td>API REST/JWT</td></tr>
+<tr><td>Kibana</td><td>5601</td><td>5601</td><td>Dashboard ELK</td></tr>
+<tr><td>Elasticsearch</td><td>9200</td><td>9200</td><td>API ES locale</td></tr>
+<tr><td>Web honeypot</td><td>8082</td><td>8080</td><td>Faux portail intranet</td></tr>
+<tr><td>Dionaea FTP</td><td>2121</td><td>21</td><td>Decoy FTP</td></tr>
+<tr><td>Dionaea HTTP</td><td>8081</td><td>80</td><td>Decoy HTTP</td></tr>
+<tr><td>Dionaea SMB</td><td>1445</td><td>445</td><td>Decoy SMB, evite conflit Windows 445</td></tr>
+<tr><td>Dionaea MySQL</td><td>13306</td><td>3306</td><td>Decoy MySQL, evite conflit local 3306</td></tr>
+<tr><td>MinIO API/Console</td><td>9000/9001</td><td>9000/9001</td><td>Stockage objet</td></tr>
+<tr><td>Redis</td><td>6379</td><td>6379</td><td>Queue technique</td></tr></tbody></table>
+<h2>Flux autorises</h2>
+<table><thead><tr><th>ID</th><th>Emetteur</th><th>Recepteur</th><th>Protocole / Port</th><th>Sens</th><th>Justification</th></tr></thead><tbody><tr><td>R1</td><td>Internet</td><td>Cowrie</td><td>TCP 22, 23</td><td>entrant</td><td>Capturer SSH/Telnet</td></tr>
+<tr><td>R2</td><td>Internet/lab</td><td>Web honeypot</td><td>TCP 8082</td><td>entrant</td><td>Faux portail intranet</td></tr>
+<tr><td>R3</td><td>Internet/lab</td><td>Dionaea</td><td>TCP 2121, 8081, 1445, 13306</td><td>entrant</td><td>Services decoy</td></tr>
+<tr><td>R4</td><td>T-Pot Filebeat</td><td>Logstash</td><td>TCP 5044 TLS 1.3</td><td>DMZ -&gt; LAN</td><td>Envoi logs securise</td></tr>
+<tr><td>R5</td><td>Logstash</td><td>Redis</td><td>TCP 6379 interne</td><td>interne</td><td>Queue d'evenements</td></tr>
+<tr><td>R6</td><td>Pipeline</td><td>Elasticsearch</td><td>TCP 9200</td><td>interne</td><td>Indexation brute/enrichie</td></tr>
+<tr><td>R7</td><td>Pipeline/API</td><td>MySQL</td><td>TCP 3306 interne</td><td>interne</td><td>Donnees metier</td></tr>
+<tr><td>R8</td><td>Pipeline/API</td><td>MinIO</td><td>TCP 9000</td><td>interne</td><td>Objets, rapports, fichiers</td></tr>
+<tr><td>R9</td><td>SOC/Admin</td><td>Dashboard/API/Kibana/MinIO</td><td>TCP 8088/8000/5601/9001</td><td>VPN/admin</td><td>Exploitation et investigation</td></tr></tbody></table>
+<h2>Regles de securite recommandees</h2>
+<ul><li>Exposer en production seulement les honeypots en DMZ.</li><li>Limiter <code>5044</code> a l'adresse IP du serveur T-Pot ou au VPN.</li><li>Garder Elasticsearch, MySQL, Redis et MinIO API non publics.</li><li>Mettre Dashboard, Kibana et API derriere VPN, MFA et filtrage IP.</li><li>Isoler physiquement ou virtuellement la DMZ du LAN analyse.</li><li>Surveiller les sorties du honeypot pour eviter toute reutilisation offensive.</li></ul>
+<h2>Validation reseau</h2>
+<p>Les tests du 2026-06-15 ont confirme les ports ouverts et services actifs: <code>22</code>, <code>23</code>, <code>2121</code>, <code>1445</code>, <code>13306</code>, <code>5044</code>, <code>5601</code>, <code>8000</code>, <code>8081</code>, <code>8082</code>, <code>8088</code>, <code>9000</code>, <code>9001</code>, <code>9200</code>. Filebeat a valide <code>parse host</code>, <code>dns lookup</code>, <code>dial up</code>, <code>TLS version: TLSv1.3</code>, et <code>talk to server</code>.</p>
+<div class="page-break"></div><h1>Architecture Technique - DECEPTR v1 MVP</h1>
+<p>Version mise a jour: 2026-06-15. Cette vue detaille les composants deployes, les fichiers importants, les ports et l'etat valide.</p>
+<h2>Schema technique Docker</h2>
+<div class="mermaid">flowchart LR
+  subgraph TPOT["tpot-runtime"]
+    COW["cowrie&lt;br/&gt;T-Pot/Cowrie&lt;br/&gt;SSH 22 / Telnet 23"]
+    FWD["deceptr-tpot-forwarder&lt;br/&gt;elastic/filebeat:8.13.0"]
+    CLOG["cowrie.json"]
+    COW --&gt; CLOG --&gt; FWD
+  end
+
+  subgraph DECEPTR["deceptr"]
+    LS["deceptr-logstash&lt;br/&gt;logstash:8.13.0&lt;br/&gt;5044 TLS"]
+    REDIS["deceptr-redis&lt;br/&gt;redis:7-alpine&lt;br/&gt;6379"]
+    PIPE["deceptr-pipeline&lt;br/&gt;Python 3.11"]
+    ES["deceptr-elasticsearch&lt;br/&gt;elasticsearch:8.13.0&lt;br/&gt;9200"]
+    MYSQL["deceptr-mysql&lt;br/&gt;mysql:8.0"]
+    MINIO["deceptr-minio&lt;br/&gt;minio&lt;br/&gt;9000/9001"]
+    KIB["deceptr-kibana&lt;br/&gt;kibana:8.13.0&lt;br/&gt;5601"]
+    API["deceptr-api&lt;br/&gt;FastAPI&lt;br/&gt;8000"]
+    DASH["deceptr-dashboard&lt;br/&gt;nginx static&lt;br/&gt;8088"]
+    EA["deceptr-elastalert&lt;br/&gt;jertel/elastalert2"]
+    WEB["deceptr-web-honeypot&lt;br/&gt;Flask&lt;br/&gt;8082"]
+    DIO["deceptr-dionaea&lt;br/&gt;FTP/HTTP/SMB/MySQL decoys"]
+  end
+
+  FWD --&gt;|"TLS 1.3 TCP/5044"| LS
+  LS --&gt; REDIS
+  REDIS --&gt; PIPE
+  PIPE --&gt; ES
+  PIPE --&gt; MYSQL
+  PIPE --&gt; MINIO
+  ES --&gt; KIB
+  ES --&gt; EA
+  MYSQL --&gt; API
+  API --&gt; DASH
+  WEB --&gt; ES
+  DIO --&gt; ES</div>
+<h2>Services actifs</h2>
+<table><thead><tr><th>Conteneur</th><th>Role</th><th>Etat attendu</th></tr></thead><tbody><tr><td><code>cowrie</code></td><td>Honeypot SSH/Telnet T-Pot runtime</td><td>running</td></tr>
+<tr><td><code>deceptr-tpot-forwarder</code></td><td>Filebeat Cowrie vers Logstash</td><td>TLS 1.3 OK</td></tr>
+<tr><td><code>deceptr-logstash</code></td><td>Ingestion et parsing</td><td>Up</td></tr>
+<tr><td><code>deceptr-redis</code></td><td>Queue anti-perte</td><td>healthy</td></tr>
+<tr><td><code>deceptr-pipeline</code></td><td>Pipeline 7 etapes</td><td>Up</td></tr>
+<tr><td><code>deceptr-elasticsearch</code></td><td>Stockage logs/evenements</td><td>healthy</td></tr>
+<tr><td><code>deceptr-mysql</code></td><td>Stockage metier</td><td>healthy</td></tr>
+<tr><td><code>deceptr-minio</code></td><td>Stockage objet</td><td>healthy</td></tr>
+<tr><td><code>deceptr-kibana</code></td><td>Visualisation ELK</td><td>Up</td></tr>
+<tr><td><code>deceptr-api</code></td><td>API REST JWT</td><td>Up</td></tr>
+<tr><td><code>deceptr-dashboard</code></td><td>Dashboard SOC</td><td>Up</td></tr>
+<tr><td><code>deceptr-elastalert</code></td><td>Alerting regles</td><td>Up</td></tr>
+<tr><td><code>deceptr-web-honeypot</code></td><td>Faux portail intranet</td><td>Up</td></tr>
+<tr><td><code>deceptr-dionaea</code></td><td>Decoys reseau</td><td>Up</td></tr></tbody></table>
+<h2>Pipeline Python</h2>
+<table><thead><tr><th>Etape</th><th>Module</th><th>Fonction</th></tr></thead><tbody><tr><td>1</td><td><code>collector.py</code></td><td>Lit Redis <code>deceptr:events</code>, fallback Elasticsearch <code>cowrie-*</code></td></tr>
+<tr><td>2</td><td><code>normalizer.py</code></td><td>Convertit Cowrie/canary en schema commun</td></tr>
+<tr><td>3</td><td><code>enricher.py</code></td><td>Ajoute GeoLite2, AbuseIPDB, VirusTotal, Feodo</td></tr>
+<tr><td>4</td><td><code>correlator.py</code></td><td>Associe contexte, campagne et MITRE</td></tr>
+<tr><td>5</td><td><code>risk_scorer.py</code></td><td>Calcule score 0-100</td></tr>
+<tr><td>6</td><td><code>detector.py</code></td><td>Declenche regles <code>login_attempt</code>, <code>honeytoken_triggered</code>, web login</td></tr>
+<tr><td>7</td><td><code>storage.py</code> / <code>alerter.py</code></td><td>Ecrit ES/MySQL/MinIO et notifie</td></tr></tbody></table>
+<h2>Index Elasticsearch</h2>
+<table><thead><tr><th>Index</th><th>Source</th><th>Role</th></tr></thead><tbody><tr><td><code>cowrie-YYYY.MM</code></td><td>Logstash</td><td>Logs bruts Cowrie</td></tr>
+<tr><td><code>deceptr-events-YYYY.MM</code></td><td>Pipeline</td><td>Evenements normalises, enrichis, scores</td></tr>
+<tr><td><code>deceptr-web-honeypot</code></td><td>Web honeypot</td><td>Acces faux portail, login, documents</td></tr></tbody></table>
+<p>Etat constate apres test: <code>cowrie-2026.06</code>, <code>deceptr-events-2026.06</code>, <code>deceptr-web-honeypot</code>.</p>
+<h2>Tables MySQL</h2>
+<table><thead><tr><th>Table</th><th>Role</th></tr></thead><tbody><tr><td><code>users</code></td><td>Utilisateurs API/dashboard</td></tr>
+<tr><td><code>alerts</code></td><td>Alertes generees</td></tr>
+<tr><td><code>iocs</code></td><td>Indicateurs par IP</td></tr>
+<tr><td><code>attackers</code></td><td>Identifiants/commandes observes</td></tr>
+<tr><td><code>campaigns</code></td><td>Regroupement par IP et techniques</td></tr>
+<tr><td><code>honeytokens</code></td><td>Canary tokens declenches</td></tr>
+<tr><td><code>rapports_dgssi</code></td><td>Historique des rapports</td></tr></tbody></table>
+<h2>Fichiers importants</h2>
+<table><thead><tr><th>Fichier / Dossier</th><th>Role</th></tr></thead><tbody><tr><td><code>start.ps1</code></td><td>Demarrage complet depuis le dossier final</td></tr>
+<tr><td><code>stop.ps1</code></td><td>Arret sans suppression de donnees</td></tr>
+<tr><td><code>deceptr/docker-compose.yml</code></td><td>Services principaux DECEPTR</td></tr>
+<tr><td><code>deceptr/docker-compose.tpot.yml</code></td><td>Integration T-Pot/Filebeat</td></tr>
+<tr><td><code>deceptr/elk/certs/ca.crt</code></td><td>CA pour Filebeat -&gt; Logstash TLS</td></tr>
+<tr><td><code>deceptr/pipeline/data/GeoLite2-City.mmdb</code></td><td>Base GeoLite2 locale</td></tr>
+<tr><td><code>deceptr/scripts/e2e-smoke.ps1</code></td><td>Test complet Cowrie -&gt; dashboard/API</td></tr>
+<tr><td><code>deceptr/honeypot-web/</code></td><td>Faux portail intranet actif</td></tr>
+<tr><td><code>deceptr/dionaea/</code></td><td>Fichiers leurres et decoys</td></tr></tbody></table>
+<h2>Commandes de verification</h2>
+<pre><code>cd D:\assir\Ismagi\PFA\DECEPTR-FINAL
+powershell -ExecutionPolicy Bypass -File .\start.ps1
+
+cd D:\assir\Ismagi\PFA\DECEPTR-FINAL\deceptr
+docker compose -f docker-compose.yml -f docker-compose.tpot.yml ps
+docker exec deceptr-tpot-forwarder filebeat test output -e --strict.perms=false
+powershell -ExecutionPolicy Bypass -File .\scripts\e2e-smoke.ps1 -ProjectRoot . -TpotRoot ..\tpot-runtime -WaitSeconds 45</code></pre>
+<h2>Resultat de validation</h2>
+<pre><code>{
+  "status": "OK",
+  "tpot_cowrie": "running",
+  "tpot_forwarder_tls": "TLSv1.3",
+  "raw_index": "cowrie-2026.06",
+  "enriched_index": "deceptr-events-2026.06",
+  "enriched_type": "login_attempt",
+  "mitre": "T1110",
+  "api_total_alerts": 161,
+  "api_alerts_24h": 80
+}</code></pre>
+<h2>Points physiques restants</h2>
+<p>La partie logique est complete en Docker/lab. En production, il reste a deployer physiquement: DMZ reelle, pare-feu pfSense/FortiGate, IPs <code>10.10.10.0/24</code>, <code>10.10.20.0/24</code>, <code>10.10.30.0/24</code>, VPN/MFA admin, SMTP reel, et cles API threat intelligence officielles.</p>
+<script>
+  mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: "base" });
+  window.addEventListener("load", async () => {
+    try { await mermaid.run({ querySelector: ".mermaid" }); }
+    finally { document.body.setAttribute("data-rendered", "true"); }
+  });
+</script>
+</body>
+</html>
